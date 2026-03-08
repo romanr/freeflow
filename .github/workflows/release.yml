@@ -18,12 +18,33 @@ jobs:
       - name: Generate version tag
         id: version
         run: |
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          TAG="build-$(date -u +'%Y%m%d-%H%M%S')-${SHORT_SHA}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # Find the latest semantic version tag (v{major}.{minor}.{patch})
+          LATEST_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ -z "$LATEST_TAG" ]; then
+            # No existing version tags — use Info.plist as the baseline
+            CURRENT=$(plutil -extract CFBundleShortVersionString raw Info.plist)
+            if ! echo "$CURRENT" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "Error: CFBundleShortVersionString '$CURRENT' is not in MAJOR.MINOR.PATCH format" >&2
+              exit 1
+            fi
+            MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+            MINOR=$(echo "$CURRENT" | cut -d. -f2)
+          else
+            MAJOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f2)
+          fi
+          if ! echo "$MINOR" | grep -qE '^[0-9]+$'; then
+            echo "Error: extracted minor version '$MINOR' is not numeric" >&2
+            exit 1
+          fi
+          NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+          echo "tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Embed build tag in Info.plist
-        run: plutil -insert FreeFlowBuildTag -string "${{ steps.version.outputs.tag }}" Info.plist
+      - name: Update version in Info.plist
+        run: |
+          plutil -replace CFBundleVersion -string "${{ steps.version.outputs.version }}" Info.plist
+          plutil -replace CFBundleShortVersionString -string "${{ steps.version.outputs.version }}" Info.plist
 
       - name: Install create-dmg
         run: brew install create-dmg
